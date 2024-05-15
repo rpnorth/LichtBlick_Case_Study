@@ -52,7 +52,7 @@ class LoadDataTables:
 
     def fix_dates(self):
         """
-        make sure all dates are datetime format, add download date from 
+        make sure all dates are datetime format, add download date from
         filename as column
         """
         # fix dates to correct format
@@ -105,17 +105,14 @@ class LoadDataTables:
         """
         in case there is duplicated information, remove
         """
-        print(self.df_contracts.shape)
         self.df_contracts = self.df_contracts.drop_duplicates()
-        print(self.df_contracts.shape)
 
     def remove_inactive(self):
         """
-        drop inactive customers - focus on active customers at time data was 
+        drop inactive customers - focus on active customers at time data was
         downloaded
         """
         self.df_contracts = self.df_contracts[self.df_contracts.enddate.isnull()]
-        print(self.df_contracts.shape)
 
     def remove_product_2000(self):
         """
@@ -141,7 +138,7 @@ class CreateRevenueTable(LoadDataTables):
 
     def __init__(self, period_start_date, download_date):
         """
-        period_start_date (str): start of period of interest, over which 
+        period_start_date (str): start of period of interest, over which
         revenue is calculated
         download_date (str): date the data was downloaded as csv, in filename
 
@@ -172,7 +169,7 @@ class CreateRevenueTable(LoadDataTables):
 
     def join_contract_price(self):
         """
-        add pricing/product info to contract table, reduce to only columns 
+        add pricing/product info to contract table, reduce to only columns
         of interest
         """
         contracts_columns = [
@@ -192,7 +189,7 @@ class CreateRevenueTable(LoadDataTables):
 
     def drop_contracts(self):
         """
-        drop any contracts that don't fit between period_start_date and 
+        drop any contracts that don't fit between period_start_date and
         download_date will also drop if dates are before price info is
         available
         """
@@ -221,7 +218,7 @@ class CreateRevenueTable(LoadDataTables):
         # first assumed date_from, date_to are startdate, enddate
         self.df["date_from"] = self.df["startdate"]
         self.df["date_to"] = self.df["enddate"]
-        # check that date_from and date_to are not outside period_start_date 
+        # check that date_from and date_to are not outside period_start_date
         # and donwload_date
         self.df.loc[self.df.date_to > self.download_date, "date_to"] = (
             self.download_date
@@ -230,7 +227,7 @@ class CreateRevenueTable(LoadDataTables):
             self.period_start_date
         )
 
-        # get start and end date of each price, depending on supply dates 
+        # get start and end date of each price, depending on supply dates
         # and price dates
         self.df["date_from"] = self.df[["startdate", "valid_from"]].max(axis=1)
         self.df["date_to"] = self.df[["enddate", "valid_until"]].min(axis=1)
@@ -243,10 +240,10 @@ class CreateRevenueTable(LoadDataTables):
         calculate usage*working_price for specified time period
 
         """
-        self.df["working_cost_yr"] = (
+        self.df["working_cost_year"] = (
             self.df.usage * self.df.price / 100
         )  # kwh/yr x ct/kwh /100 = €/yr
-        self.df["working_cost_day"] = self.df.working_cost_yr / (
+        self.df["working_cost_day"] = self.df.working_cost_year / (
             365
         )  # usage €/day (approx)
         self.df["working_cost_period"] = (
@@ -263,6 +260,7 @@ class CreateRevenueTable(LoadDataTables):
                 "id",
                 "usage_period",
                 "working_cost_period",
+                "working_cost_year",
                 "date_from",
                 "date_to",
                 "download_date_x",
@@ -276,13 +274,14 @@ class CreateRevenueTable(LoadDataTables):
         calculate base_price for specified time period
 
         """
+        self.df["base_cost_year"] = self.df.price  # €/year
         self.df["base_cost_day"] = self.df.price / 365  # €/day (approx)
         self.df["base_cost_period"] = (
             self.df.base_cost_day * self.df.price_period_days
         )  # €/period
         # dataframe of base_cost_period only
         self.df_base_cost = self.df.query('productcomponent == "baseprice"')[
-            ["id", "base_cost_period", "date_from", "date_to"]
+            ["id", "base_cost_period", "base_cost_year", "date_from", "date_to"]
         ]
 
     def calc_revenue(self):
@@ -295,27 +294,39 @@ class CreateRevenueTable(LoadDataTables):
             on="date_from",
             by="id",
         )
-
-        self.df_w_revenue["revenue_euro"] = self.df_w_revenue[
+        # revenue for this period
+        self.df_w_revenue["revenue_euro_period"] = self.df_w_revenue[
             ["base_cost_period", "working_cost_period"]
+        ].sum(axis=1)
+        # annual revenue for this period
+        self.df_w_revenue["revenue_euro_year"] = self.df_w_revenue[
+            ["base_cost_year", "working_cost_year"]
         ].sum(axis=1)
 
     def create_output_table(self):
         """
-        get revenue per customer at time data was downloaded and output 
+        get revenue per customer at time data was downloaded and output
         table in requested format:
-        "Verbrauch (consumption) and Umsatz (revenue) attached to the 
+        "Verbrauch (consumption) and Umsatz (revenue) attached to the
         attributes Anlagedatum (creation date) and Produkt (product)"
         """
+        # total revenue per customer over the period
         self.df_output = self.df_w_revenue.groupby(
             ["id", "download_date_x", "productname", "createdat"]
-        )[["revenue_euro", "usage_period"]].sum()
+        )[["revenue_euro_period", "usage_period"]].sum()
+
+        # average annual revenue per customer over the period
+        self.df_output["revenue_euro_year"] = self.df_w_revenue.groupby(
+            ["id", "download_date_x", "productname", "createdat"]
+        )["revenue_euro_year"].mean()
+
         self.df_output = self.df_output.reset_index()
         self.df_output = self.df_output.rename(
             columns={
                 "id": "customer_id",
                 "usage_period": "consumption",
-                "revenue_euro": "revenue",
+                "revenue_euro_period": "period_total_revenue",
+                "revenue_euro_year": "annual_average_revenue",
                 "createdat": "creation_date",
                 "productname": "product",
                 "download_date_x": "download_date",
@@ -328,10 +339,16 @@ class CreateRevenueTable(LoadDataTables):
         """
         # number of active contracts
         self.number_contracts = self.df_output.customer_id.count()
-        # total revenue
-        self.total_revenue = self.df_output.revenue.sum()
-        # average revenue per contract
+        # total revenue for period
+        self.total_revenue = self.df_output.period_total_revenue.sum()
+        # average revenue per contract for period
         self.av_revenue_per_contract = self.total_revenue / self.number_contracts
+        # total average annual revenue for period
+        self.total_annual_revenue = self.df_output.annual_average_revenue.sum()
+        # average annual revenue per contract for period
+        self.annual_av_revenue_per_contract = (
+            self.total_annual_revenue / self.number_contracts
+        )
 
     def run_create_revenue_table(self):
         self.join_price_product()
