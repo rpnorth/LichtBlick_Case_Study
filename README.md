@@ -1,6 +1,6 @@
 
 # LichtBlick Analytics Engineer Case Study
-#### Submitted by Ryan North
+#### Submitted by Dr. Ryan North
 
 ## Summary of completed work
 The work consisted of loading the data, exploring the data, cleaning the data, creating the new table and summarizing revenue changes over a time period.
